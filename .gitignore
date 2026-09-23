@@ -1,0 +1,35 @@
+# Virtual environment
+.venv/
+
+# Environment variables / secrets
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# VS Code
+.vscode/
+
+# PyCharm
+.idea/
+
+# Logs
+*.log
+
+# Temporary files
+storage/temp/*
+storage/uploads/*
+storage/audio/*
+storage/processed/*
+storage/exports/*
+
+# Large datasets
+data/raw/*
+data/processed/*
+data/synthetic/*
+
+# AI model files
+trained_models/*
