@@ -1,11 +1,16 @@
 from sqlalchemy import text
-from sqlalchemy.dialects.mysql import BIGINT, LONGTEXT, TIMESTAMP, TINYINT
+from sqlalchemy.dialects.mysql import (
+    BIGINT,
+    SMALLINT,
+    TIMESTAMP,
+    TINYINT,
+)
 
 from app.extensions import db
 
 
-class Summary(db.Model):
-    __tablename__ = "summaries"
+class KeyPoint(db.Model):
+    __tablename__ = "key_points"
 
     id = db.Column(
         BIGINT(unsigned=True),
@@ -32,8 +37,23 @@ class Summary(db.Model):
     )
 
     content = db.Column(
-        db.Text().with_variant(db.Text(length=4294967295), "mysql"),
+        db.Text,
         nullable=False
+    )
+
+    sort_order = db.Column(
+        SMALLINT(unsigned=True),
+        nullable=False,
+        server_default=text("0")
+    )
+
+    evidence_segment_id = db.Column(
+        BIGINT(unsigned=True),
+        db.ForeignKey(
+            "transcript_segments.id",
+            ondelete="SET NULL"
+        ),
+        nullable=True
     )
 
     is_user_edited = db.Column(
@@ -48,34 +68,23 @@ class Summary(db.Model):
         server_default=text("CURRENT_TIMESTAMP")
     )
 
-    updated_at = db.Column(
-        TIMESTAMP,
-        nullable=False,
-        server_default=text(
-            "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
-        )
-    )
-
     meeting = db.relationship(
         "Meeting",
-        back_populates="summaries"
+        back_populates="key_points"
     )
 
     ai_run = db.relationship(
         "AIRun",
-        back_populates="summaries"
+        back_populates="key_points"
     )
 
-    __table_args__ = (
-        db.Index(
-            "idx_summaries_meeting",
-            "meeting_id",
-            "created_at"
-        ),
+    evidence_segment = db.relationship(
+        "TranscriptSegment",
+        back_populates="evidence_key_points"
     )
 
     def __repr__(self):
         return (
-            f"<Summary id={self.id} "
+            f"<KeyPoint id={self.id} "
             f"meeting_id={self.meeting_id}>"
         )
