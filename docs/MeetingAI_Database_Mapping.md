@@ -541,24 +541,32 @@ These rules are requirements for later implementation, not implemented SQL CHECK
 
 ## Decisions Required
 
-No field, enum, persistence mechanism, or workflow policy below is invented or implemented here.
+Phase 1.6 review: **2 of the original 12 items are RESOLVED; 10 NEED HUMAN DECISION.** Complete decision records, evidence, priority, impacts and edge cases are in [MeetingAI Architecture Decisions](MeetingAI_Architecture_Decisions.md).
 
-| ID | Source discrepancy / omission | Decision needed before dependent implementation |
+RESOLVED describes a documented design decision, not implemented schema. No models, migrations, canonical workbook changes or actual database changes were made. Source priority is Function Dataset -> Use Case Specification -> Database Design -> API Contract -> UI Page Flow -> AI IO Contract -> AGENTS.md.
+
+| ID | Status | Decision / remaining requirement |
 | --- | --- | --- |
-| D01 | F042 permits missing timestamp nullable/fallback; DB COLUMNS requires non-null start_ms/end_ms with zero defaults. | Choose an explicit missing-timestamp fallback or authorize nullable columns. Do not fabricate 0/0 as a valid timed segment; start < end remains required. |
-| D02 | API A080/REQUEST_FIELDS allows key_points regeneration; ai_runs.run_type has FULL/SUMMARY/DECISIONS/ACTION_ITEMS/RISKS/OPEN_QUESTIONS only. | Specify how a key-points-only run is represented; do not silently use FULL or add KEY_POINTS. |
-| D03 | AI README describes schema_version provenance via ai_runs, but DB has no schema_version or metadata JSON column; AI VERSIONING also names input/output JSON and config. | Specify durable schema-version storage, if required per inference. Do not overload prompt_version. |
-| D04 | F041 asks to preserve ASR model/version; transcript_segments has no such fields and ai_runs.run_type describes NLP output types. | Specify where ASR model/version is recorded without pretending an NLP run type represents ASR. |
-| D05 | COLUMNS has key_points.ai_run_id, decisions.ai_run_id and action_items.ai_run_id FKs, but RELATIONSHIPS states ON DELETE only for summaries.ai_run_id. | Specify ON DELETE for these three FKs. Nullability alone does not establish SET NULL. |
-| D06 | F064/F094 require preserving previous results/user edits; summaries and other outputs can have many runs, but there is no active-result pointer and mixed section regeneration is allowed. | Define current-result selection across sections, human-created rows with null ai_run_id, replacement confirmation, and rollback behavior. Do not assume max(id) or latest run solves all sections. |
-| D07 | F095 permits locking or continued editing after confirmation; API transitions do not define edit/regenerate after CONFIRMED. | Choose whether edits reset review_status, are rejected, or require a version workflow. |
-| D08 | F061 mentions empty/concurrent edits; API A061 permits empty only if a business rule allows it; UI supplies an editor but no complete conflict policy. | Decide empty text acceptance, how to restore raw text, and stale-edit conflict behavior. No optimistic-lock column is added here. |
-| D09 | AI OUTPUT_SCHEMA supports multiple evidence refs. DB_MAPPING says first ref for key points and strongest task/final-state ref for actions; long-meeting merge needs correction evidence too. | Define a deterministic primary-evidence selection rule and whether/how full refs or snapshots are retained. No log-storage format is prescribed. |
-| D10 | F030–F034/BR14 require no conflicting jobs and checkpoint retry; schema has no unique active-job constraint, checkpoint table, or explicit normalized-file path. | Specify concurrency enforcement, durable checkpoint/artifact identification and restart recovery using or amending the canonical schema. Do not invent columns or a queue technology. |
-| D11 | F078/F102 need dates relative to meeting_date/today; DB DATETIME has no timezone, API uses ISO datetime, and no user timezone policy exists. | Define storage/API timezone convention and “today” for overdue/relative dates. Do not assume the developer machine timezone. |
-| D12 | F116/F117 require both database and file deletion; UC25 describes success but not partial filesystem failure recovery. | Define deletion ordering and recovery if file removal fails or the DB transaction fails. No outbox/soft-delete fields are added here. |
+| D01 | RESOLVED | Use nullable missing timestamp bounds; retain strict start < end for known bounds. Propose two column nullability/default changes and corresponding API/AI exceptions; still 11 tables. |
+| D02 | RESOLVED | MVP section-only regeneration is summary, decisions, action_items per F094/UC19. Preserve full-analysis key points and manual CRUD; no KEY_POINTS enum addition. |
+| D03 | NEEDS HUMAN DECISION | Schema JSON/config validation and model provenance are fixed. Durable per-run schema linkage/encoding is undecided; DB prompt_version explicitly describes prompt/schema version, so the previous categorical prohibition was too strong. |
+| D04 | NEEDS HUMAN DECISION | ASR model/version must be recorded; storage and association with transcription attempts/segments are unspecified. |
+| D05 | NEEDS HUMAN DECISION | Three output ai_run_id FK deletion actions are unspecified. Preserve other explicit CASCADE/SET NULL policies; do not infer these from nullability. |
+| D06 | NEEDS HUMAN DECISION | Preserve accepted results and user edits; selection/publication across full/section runs, empty outputs and manual rows remains unspecified. |
+| D07 | NEEDS HUMAN DECISION | Confirmation applies to minutes, not a new final-transcript state. Define its boundary with ongoing task changes, transcript edits and reanalysis before choosing a lock/version policy. |
+| D08 | NEEDS HUMAN DECISION | Raw preservation and non-NULL edited_text precedence are resolved sub-rules. Empty edits, reset input and concurrent-save behavior remain undecided. |
+| D09 | NEEDS HUMAN DECISION | One nullable primary FK is established; first key-point ref is specified. Decision/task tie rules and optional full-ref retention/evidence-text policy remain undecided. Higher-priority nullable evidence controls stricter AI examples. |
+| D10 | NEEDS HUMAN DECISION | Checkpoint retry and no conflicting jobs are mandatory. Claim atomicity, proof of valid checkpoints, artifact identity and interrupted-worker recovery remain unspecified. |
+| D11 | NEEDS HUMAN DECISION | Timezone and calendar policy are unspecified. Do not silently replace F102 status != DONE with the API's additional CANCELLED exclusion. |
+| D12 | NEEDS HUMAN DECISION | Safe database/audio deletion, busy rejection and tolerating absent files are fixed. Cross-resource commit ordering and failure recovery remain unspecified. |
 
-D01, D02, D03, D04 and D05 are direct schema-mapping blockers for the affected fields/relationships. D06–D12 must be resolved before their services are implemented and may affect schema choices. They do not block the foundation changes in this phase.
+D01 is the only settled schema amendment proposed: nullable start_ms/end_ms with NULL defaults, retaining INT UNSIGNED and the 11-table count. D02 changes the derived MVP API section scope, not the enum. All other possible schema/policy changes remain undecided; do not implement a guessed field, FK action, version registry, result pointer, lock, timezone or deletion journal.
+
+The supplemental **S01 — nullable owners/deadlines** is **RESOLVED** in the architecture document: unknown owners are zero owner rows / owners=[], named owners may have a NULL speaker_id, and ambiguous/missing deadlines remain nullable while stated raw phrases are preserved. It does not change the schema and is not included in the original 12-item counts.
+
+Raw-text preservation, effective edited-text selection, nullable evidence and confirmation semantics have supported sub-rules, but D07–D09 remain open for their full policy scope. There is no independently confirmed/final transcript state in the canonical MVP. The full record explains why a blanket meeting lock could weaken required task workflows.
+
+Resolve each remaining human decision before implementing its affected schema or service. The untouched sections of this mapping retain their Phase 1.5 content; use the statuses and explanations here when interpreting their older blocker references.
 
 ## Review and later implementation gate
 
