@@ -85,6 +85,36 @@ class AuthenticationTests(unittest.TestCase):
         with self.client.session_transaction() as session:
             self.assertNotIn("user_id", session)
 
+    def test_auth_methods_and_paths_match_a001_through_a004(self):
+        routes = {
+            rule.rule: rule.methods - {"HEAD", "OPTIONS"}
+            for rule in self.app.url_map.iter_rules()
+            if rule.endpoint.startswith("auth.")
+        }
+        self.assertEqual(routes, {
+            "/api/auth/register": {"POST"}, "/api/auth/login": {"POST"},
+            "/api/auth/logout": {"POST"}, "/api/auth/me": {"GET"},
+        })
+
+    def test_auth_success_responses_and_logs_never_expose_passwords(self):
+        with patch.object(self.app.logger, "handle") as log:
+            responses = [self.register(), self.login(), self.client.get("/api/auth/me")]
+            with self.app.app_context():
+                stored_hash = db.session.scalar(
+                    db.select(User.password_hash).where(User.email == self.email)
+                )
+            responses.append(self.client.post("/api/auth/logout"))
+        for response, status in zip(responses, (201, 200, 200, 200)):
+            self.assertEqual(response.status_code, status)
+            self.assertEqual(set(response.json), {"success", "data", "message"})
+            self.assertIs(response.json["success"], True)
+            self.assertIsNone(response.json["message"])
+            for sensitive in (self.password, stored_hash, "password_hash", "confirm_password"):
+                self.assertNotIn(sensitive, str(response.json))
+        for call in log.call_args_list:
+            for sensitive in (self.password, stored_hash):
+                self.assertNotIn(sensitive, call.args[0].getMessage())
+
     def test_duplicate_normalized_email(self):
         self.assertEqual(self.register().status_code, 201)
         self.assert_error(self.register(email=self.email.upper()), 409, "EMAIL_EXISTS")

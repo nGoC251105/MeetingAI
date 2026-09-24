@@ -34,6 +34,29 @@ class ConfigurationTests(unittest.TestCase):
     def test_no_secret_fallback(self):
         self.assertIsNone(self.read_config({}).SECRET_KEY)
 
+    def test_session_security_defaults(self):
+        config = self.read_config({})
+        self.assertTrue(config.SESSION_COOKIE_SECURE)
+        self.assertTrue(config.SESSION_COOKIE_HTTPONLY)
+        self.assertEqual(config.SESSION_COOKIE_SAMESITE, "Lax")
+
+    def test_production_cannot_inherit_insecure_development_cookie_override(self):
+        for environment in ("production", "staging", "", "unknown"):
+            with self.subTest(environment=environment):
+                config = self.read_config({
+                    "FLASK_ENV": environment, "SESSION_COOKIE_SECURE": "false",
+                })
+                self.assertTrue(config.SESSION_COOKIE_SECURE)
+        self.assertTrue(self.read_config({"FLASK_DEBUG": "true"}).SESSION_COOKIE_SECURE)
+
+    def test_explicit_development_cookie_settings(self):
+        self.assertFalse(self.read_config({"FLASK_ENV": "development"}).SESSION_COOKIE_SECURE)
+        for flag in ("true", "invalid", ""):
+            with self.subTest(flag=flag):
+                self.assertTrue(self.read_config({
+                    "FLASK_ENV": "development", "SESSION_COOKIE_SECURE": flag,
+                }).SESSION_COOKIE_SECURE)
+
     def test_explicit_secret_is_preserved(self):
         self.assertEqual(self.read_config({"SECRET_KEY": "test-only-value"}).SECRET_KEY,
                          "test-only-value")
@@ -77,6 +100,12 @@ class FoundationTests(unittest.TestCase):
         from app.models import User
         self.assertIs(User.metadata, db.metadata)
         self.assertEqual(len(db.metadata.tables), 11)
+
+    def test_migrate_initialized_exactly_once_per_factory_call(self):
+        with patch.object(Config, "SECRET_KEY", "test-only-value"), \
+                patch.object(migrate, "init_app", wraps=migrate.init_app) as initialize:
+            app = create_app()
+        initialize.assert_called_once_with(app, db)
 
     def test_health_executes_select_one(self):
         with patch.object(db.session, "execute") as execute:

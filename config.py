@@ -31,7 +31,10 @@ class Config:
 
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
-    # Enable for HTTPS deployments; localhost development uses HTTP.
-    SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "false").strip().lower() in {
-        "1", "true", "yes", "on"
-    }
+    # Only explicitly declared development may opt into HTTP cookies.
+    # Missing/unknown environments and flags keep the HTTPS production default.
+    SESSION_COOKIE_SECURE = (
+        os.getenv("FLASK_ENV", "production").strip().lower() != "development"
+        or os.getenv("SESSION_COOKIE_SECURE", "false").strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
