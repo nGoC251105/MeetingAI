@@ -14,6 +14,7 @@ def create_app():
         raise RuntimeError("SECRET_KEY must be configured in the environment.")
 
     db.init_app(app)
+    from app import models  # noqa: F401
     migrate.init_app(app, db)
 
     @app.route("/")
