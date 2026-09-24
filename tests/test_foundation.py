@@ -74,7 +74,9 @@ class FoundationTests(unittest.TestCase):
         self.assertIs(self.app.extensions["sqlalchemy"], db)
         self.assertIs(self.app.extensions["migrate"].db, db)
         self.assertIs(self.app.extensions["migrate"].migrate, migrate)
-        self.assertEqual(list(db.metadata.tables), [])
+        from app.models import User
+        self.assertIs(User.metadata, db.metadata)
+        self.assertEqual(len(db.metadata.tables), 11)
 
     def test_health_executes_select_one(self):
         with patch.object(db.session, "execute") as execute:
