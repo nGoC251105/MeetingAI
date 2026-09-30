@@ -17,10 +17,11 @@ def create_app():
     from app import models  # noqa: F401
     migrate.init_app(app, db)
 
-    from app.routes.auth_routes import auth_bp, error_response
+    from app.routes.auth_routes import auth_bp, profile_bp, error_response
     from app.services.auth_service import AuthError
 
     app.register_blueprint(auth_bp)
+    app.register_blueprint(profile_bp)
     app.register_error_handler(AuthError, error_response)
 
     @app.route("/")

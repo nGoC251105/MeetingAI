@@ -28,6 +28,11 @@ class Config:
     )
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    # MySQL TIMESTAMP reads and server-generated timestamps use UTC per D11.
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "connect_args": {"init_command": "SET time_zone = '+00:00'"},
+    }
+    APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Asia/Ho_Chi_Minh")
 
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"

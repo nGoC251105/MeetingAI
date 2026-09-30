@@ -4,12 +4,13 @@ Run: .venv/Scripts/python.exe -m unittest discover -s tests -p test_auth.py -v
 The existing database must already be migrated. No schema is created or dropped.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import secrets
 import unittest
 from unittest.mock import patch
 import uuid
 
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from werkzeug.security import check_password_hash
 
@@ -28,6 +29,7 @@ class AuthenticationTests(unittest.TestCase):
         self.app.config.update(TESTING=True, SESSION_COOKIE_SECURE=False)
         self.client = self.app.test_client()
         self.email = f"auth-test-{uuid.uuid4().hex}@example.com"
+        self.extra_emails = set()
         self.password = "  Mật khẩu an toàn 123  "
         self.payload = {
             "full_name": "  Nguyễn Minh  ", "email": self.email,
@@ -43,7 +45,9 @@ class AuthenticationTests(unittest.TestCase):
     def cleanup_user(self):
         with self.app.app_context():
             db.session.rollback()
-            db.session.execute(db.delete(User).where(User.email == self.email))
+            db.session.execute(db.delete(User).where(
+                User.email.in_({self.email} | self.extra_emails)
+            ))
             db.session.commit()
             self.assertIsNone(db.session.scalar(db.select(User).where(User.email == self.email)))
             db.session.remove()
@@ -220,7 +224,8 @@ class AuthenticationTests(unittest.TestCase):
         response = self.client.get("/api/auth/me")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(set(response.json["data"]), {"id", "full_name", "email", "created_at"})
-        datetime.fromisoformat(response.json["data"]["created_at"])
+        timestamp = datetime.fromisoformat(response.json["data"]["created_at"])
+        self.assertEqual(timestamp.utcoffset(), timedelta(0))
         self.assertEqual(self.client.get("/test-private").status_code, 200)
         self.assertEqual(response.headers["Cache-Control"], "no-store")
 
@@ -317,6 +322,225 @@ class AuthenticationTests(unittest.TestCase):
         self.assertFalse(auth_service.verify_password(first, "wrong"))
         for invalid in ("plaintext-password", "unsupported$salt$hash", None):
             self.assertFalse(auth_service.verify_password(invalid, self.password))
+
+    def authenticated_user(self):
+        response = self.register()
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(self.login().status_code, 200)
+        return response.json["data"]["id"]
+
+    def update_profile(self, **overrides):
+        return self.client.put("/api/profile", json={
+            "full_name": "Updated Name", "email": self.email,
+        } | overrides)
+
+    def change_password(self, **overrides):
+        return self.client.post("/api/profile/change-password", json={
+            "current_password": self.password,
+            "new_password": "  New secure password 123  ",
+            "confirm_password": "  New secure password 123  ",
+        } | overrides)
+
+    def test_profile_methods_and_paths_match_a005_a006(self):
+        routes = {r.rule: r.methods - {"HEAD", "OPTIONS"}
+                  for r in self.app.url_map.iter_rules()
+                  if r.endpoint.startswith("profile.")}
+        self.assertEqual(routes, {
+            "/api/profile": {"PUT"}, "/api/profile/change-password": {"POST"},
+        })
+
+    def test_profile_update_normalizes_and_persists_only_own_profile(self):
+        user_id = self.authenticated_user()
+        new_email = f"profile-test-{uuid.uuid4().hex}@example.com"
+        self.extra_emails.add(new_email)
+        with self.app.app_context():
+            before = db.session.get(User, user_id)
+            original = (before.password_hash, before.created_at, before.is_active)
+        response = self.update_profile(full_name="  New Name  ", email=f" {new_email.upper()} ")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json, {"success": True, "message": None,
+                         "data": {"id": user_id, "full_name": "New Name", "email": new_email}})
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(self.client.get("/api/auth/me").json["data"]["email"], new_email)
+        with self.app.app_context():
+            after = db.session.get(User, user_id)
+            self.assertEqual((after.password_hash, after.created_at, after.is_active), original)
+        self.assertEqual(self.login(email=new_email).status_code, 200)
+        self.assert_error(self.login(), 401, "INVALID_CREDENTIALS")
+
+    def test_profile_update_unchanged_email_is_allowed(self):
+        self.authenticated_user()
+        self.assertEqual(self.update_profile(email=f" {self.email.upper()} ").status_code, 200)
+
+    def test_profile_rejects_invalid_missing_and_protected_fields(self):
+        user_id = self.authenticated_user()
+        cases = [{}, {"full_name": "Only name"}, {"email": self.email}]
+        base = {"full_name": "New Name", "email": self.email}
+        cases += [base | fields for fields in (
+            {"full_name": "  "}, {"full_name": None}, {"full_name": []},
+            {"full_name": "x" * 121}, {"email": "bad"}, {"email": None},
+            {"email": []}, {"email": "a..b@example.com"},
+            {"email": "x" * 180 + "@example.com"},
+        )]
+        cases += [base | {field: "forbidden"} for field in (
+            "id", "user_id", "password_hash", "created_at", "updated_at", "is_active",
+        )]
+        for payload in cases:
+            with self.subTest(fields=list(payload)):
+                self.assert_error(self.client.put("/api/profile", json=payload),
+                                  400, "VALIDATION_ERROR")
+        with self.app.app_context():
+            user = db.session.get(User, user_id)
+            self.assertEqual(user.full_name, "Nguyễn Minh")
+            self.assertEqual(user.email, self.email)
+            self.assertEqual(user.is_active, 1)
+
+    def test_duplicate_profile_email_and_constraint_race_preserve_users(self):
+        user_id = self.authenticated_user()
+        other_email = f"other-{uuid.uuid4().hex}@example.com"
+        self.extra_emails.add(other_email)
+        other_id = self.register(email=other_email, full_name="Other User").json["data"]["id"]
+        self.assert_error(self.update_profile(email=f" {other_email.upper()} "), 409, "EMAIL_EXISTS")
+        scalar = db.session.scalar
+
+        def race(statement, *args, **kwargs):
+            if statement.column_descriptions[0]["name"] == "id":
+                return None  # Concurrent insert wins after the precheck.
+            return scalar(statement, *args, **kwargs)
+
+        with patch.object(db.session, "scalar", side_effect=race):
+            self.assert_error(self.update_profile(email=other_email), 409, "EMAIL_EXISTS")
+        with self.app.app_context():
+            self.assertEqual(db.session.get(User, user_id).email, self.email)
+            self.assertEqual(db.session.get(User, user_id).full_name, "Nguyễn Minh")
+            self.assertEqual(db.session.get(User, other_id).full_name, "Other User")
+
+    def test_account_mutations_require_active_session(self):
+        self.assert_error(self.update_profile(), 401, "UNAUTHORIZED")
+        self.assert_error(self.change_password(), 401, "UNAUTHORIZED")
+        user_id = self.authenticated_user()
+        with self.app.app_context():
+            db.session.execute(db.update(User).where(User.id == user_id).values(is_active=0))
+            db.session.commit()
+        for operation in (self.update_profile, self.change_password):
+            with self.client.session_transaction() as session:
+                session["user_id"] = user_id
+            self.assert_error(operation(), 401, "UNAUTHORIZED")
+            with self.client.session_transaction() as session:
+                self.assertNotIn("user_id", session)
+
+    def test_profile_mutations_reject_malformed_json(self):
+        self.authenticated_user()
+        for method, path in (("PUT", "/api/profile"), ("POST", "/api/profile/change-password")):
+            for body, content_type in (("{", "application/json"), ("[]", "application/json"),
+                                       ("null", "application/json"), ("{}", "text/plain")):
+                with self.subTest(path=path, body=body):
+                    self.assert_error(self.client.open(path, method=method, data=body,
+                                      content_type=content_type), 400, "VALIDATION_ERROR")
+
+    def test_password_change_hashes_and_replaces_login_password(self):
+        user_id = self.authenticated_user()
+        new_password = "  New secure password 123  "
+        with self.app.app_context():
+            old_hash = db.session.get(User, user_id).password_hash
+        response = self.change_password()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json, {"success": True, "data": None, "message": None})
+        with self.app.app_context():
+            stored = db.session.get(User, user_id).password_hash
+            self.assertNotEqual(stored, old_hash)
+            self.assertNotEqual(stored, new_password)
+            self.assertTrue(check_password_hash(stored, new_password))
+            self.assertFalse(check_password_hash(stored, self.password))
+        self.assert_error(self.login(), 401, "INVALID_CREDENTIALS")
+        self.assertEqual(self.login(password=new_password).status_code, 200)
+
+    def test_wrong_current_password_has_canonical_safe_error(self):
+        self.authenticated_user()
+        response = self.change_password(current_password="incorrect-current-secret")
+        self.assert_error(response, 400, "INVALID_PASSWORD")
+        self.assertEqual(response.json["error"]["details"], {})
+        self.assertEqual(self.login().status_code, 200)
+
+    def test_password_change_validation_and_minimum_length(self):
+        self.authenticated_user()
+        base = {"current_password": self.password, "new_password": "abcdefgh",
+                "confirm_password": "abcdefgh"}
+        cases = [{}, *[{k: v for k, v in base.items() if k != missing} for missing in base]]
+        cases += [base | fields for fields in (
+            {"current_password": ""}, {"current_password": []},
+            {"new_password": None}, {"new_password": 12345678},
+            {"new_password": "short", "confirm_password": "short"},
+            {"confirm_password": None}, {"confirm_password": "mismatch"},
+            {"password_hash": "forbidden"}, {"id": 1},
+        )]
+        for payload in cases:
+            with self.subTest(fields=list(payload)):
+                self.assert_error(self.client.post("/api/profile/change-password", json=payload),
+                                  400, "VALIDATION_ERROR")
+        self.assertEqual(self.login().status_code, 200)
+        self.assertEqual(self.client.post("/api/profile/change-password", json=base).status_code, 200)
+        self.assertEqual(self.login(password="abcdefgh").status_code, 200)
+
+    def test_password_change_rechecks_latest_hash_under_lock(self):
+        user_id = self.authenticated_user()
+        concurrent_password = "Concurrent replacement password"
+        with self.app.app_context():
+            stale = db.session.get(User, user_id)
+            with db.engine.begin() as connection:
+                connection.execute(db.update(User).where(User.id == user_id).values(
+                    password_hash=auth_service.hash_password(concurrent_password)))
+            self.assertTrue(check_password_hash(stale.password_hash, self.password))
+            with self.assertRaises(auth_service.AuthError) as caught:
+                auth_service.change_password(user_id, {
+                    "current_password": self.password, "new_password": "abcdefgh",
+                    "confirm_password": "abcdefgh",
+                })
+            self.assertEqual(caught.exception.code, "INVALID_PASSWORD")
+        self.assertEqual(self.login(password=concurrent_password).status_code, 200)
+
+    def test_account_responses_and_logs_do_not_leak_secrets(self):
+        user_id = self.authenticated_user()
+        with patch.object(self.app.logger, "handle") as log:
+            responses = [self.update_profile(), self.change_password(current_password="wrong-secret"),
+                         self.change_password(), self.client.get("/api/auth/me")]
+        with self.app.app_context():
+            stored = db.session.get(User, user_id).password_hash
+        output = str([r.json for r in responses]) + " ".join(c.args[0].getMessage() for c in log.call_args_list)
+        for sensitive in (self.password, "  New secure password 123  ", "wrong-secret", stored,
+                          "password_hash"):
+            self.assertNotIn(sensitive, output)
+
+    def test_account_commit_failures_rollback_without_leaking(self):
+        user_id = self.authenticated_user()
+        with self.app.app_context():
+            original_hash = db.session.get(User, user_id).password_hash
+        for operation in (self.update_profile, self.change_password):
+            error = OperationalError("private SQL", {}, Exception(self.password + original_hash))
+            with patch.object(db.session, "commit", side_effect=error), \
+                    self.assertLogs(self.app.logger, level="ERROR") as logs:
+                response = operation()
+            self.assert_error(response, 500, "DB_ERROR")
+            for secret in (self.password, original_hash, "private SQL"):
+                self.assertNotIn(secret, str(response.json) + " ".join(logs.output))
+            with self.app.app_context():
+                user = db.session.get(User, user_id)
+                self.assertEqual(user.password_hash, original_hash)
+                self.assertEqual(user.full_name, "Nguyễn Minh")
+        self.assertEqual(self.login().status_code, 200)
+
+    def test_account_timestamp_matches_utc_database_instant(self):
+        user_id = self.authenticated_user()
+        value = datetime.fromisoformat(self.client.get("/api/auth/me").json["data"]["created_at"])
+        self.assertEqual(value.utcoffset(), timedelta(0))
+        with self.app.app_context():
+            self.assertEqual(db.session.execute(text("SELECT @@session.time_zone")).scalar_one(), "+00:00")
+            epoch = db.session.execute(text("SELECT UNIX_TIMESTAMP(created_at) FROM users WHERE id=:id"),
+                                       {"id": user_id}).scalar_one()
+            self.assertEqual(value.timestamp(), float(epoch))
+            with db.engine.connect() as second_connection:
+                self.assertEqual(second_connection.execute(text("SELECT @@session.time_zone")).scalar_one(),
+                                 "+00:00")
 
 
 if __name__ == "__main__":

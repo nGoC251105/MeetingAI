@@ -10,12 +10,14 @@ from app.services import auth_service
 
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
+profile_bp = Blueprint("profile", __name__, url_prefix="/api/profile")
 
 ERRORS = {
     "VALIDATION_ERROR": (400, "Dữ liệu gửi lên chưa hợp lệ."),
     "UNAUTHORIZED": (401, "Vui lòng đăng nhập để tiếp tục."),
     "EMAIL_EXISTS": (409, "Email đã được sử dụng."),
     "INVALID_CREDENTIALS": (401, "Email hoặc mật khẩu không đúng."),
+    "INVALID_PASSWORD": (400, "Mật khẩu hiện tại không đúng."),
     "ACCOUNT_DISABLED": (403, "Tài khoản hiện không hoạt động."),
     "DB_ERROR": (500, "Không thể lưu dữ liệu. Vui lòng thử lại."),
     "INTERNAL_ERROR": (500, "Không thể xử lý yêu cầu. Vui lòng thử lại."),
@@ -23,6 +25,7 @@ ERRORS = {
 
 
 @auth_bp.errorhandler(auth_service.AuthError)
+@profile_bp.errorhandler(auth_service.AuthError)
 def error_response(error):
     status, message = ERRORS[error.code]
     if error.code == "ACCOUNT_DISABLED":
@@ -56,18 +59,21 @@ def success(data=None, status=200):
 
 
 @auth_bp.after_request
+@profile_bp.after_request
 def prevent_auth_caching(response):
     response.headers["Cache-Control"] = "no-store"
     return response
 
 
 @auth_bp.errorhandler(SQLAlchemyError)
+@profile_bp.errorhandler(SQLAlchemyError)
 def database_error(error):
     current_app.logger.error("Authentication database failure (%s).", type(error).__name__)
     return error_response(auth_service.AuthError("DB_ERROR"))
 
 
 @auth_bp.errorhandler(Exception)
+@profile_bp.errorhandler(Exception)
 def internal_error(error):
     if isinstance(error, HTTPException):
         return error
@@ -101,3 +107,17 @@ def logout():
 @login_required
 def me():
     return success(auth_service.user_data(g.current_user, include_created_at=True))
+
+
+@profile_bp.put("")
+@login_required
+def update_profile():
+    user = auth_service.update_profile(g.current_user.id, json_object())
+    return success(auth_service.user_data(user))
+
+
+@profile_bp.post("/change-password")
+@login_required
+def change_password():
+    auth_service.change_password(g.current_user.id, json_object())
+    return success()
