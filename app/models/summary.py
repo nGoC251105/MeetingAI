@@ -32,7 +32,7 @@ class Summary(db.Model):
     )
 
     content = db.Column(
-        db.Text().with_variant(db.Text(length=4294967295), "mysql"),
+        db.Text().with_variant(LONGTEXT(), "mysql"),
         nullable=False
     )
 

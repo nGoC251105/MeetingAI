@@ -51,7 +51,7 @@ class User(db.Model):
     meetings = db.relationship(
         "Meeting",
         back_populates="user",
-        passive_deletes=True
+        passive_deletes="all"
     )
 
     __table_args__ = (

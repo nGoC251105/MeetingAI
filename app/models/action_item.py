@@ -119,7 +119,7 @@ class ActionItem(db.Model):
     owners = db.relationship(
         "ActionItemOwner",
         back_populates="action_item",
-        passive_deletes=True
+        passive_deletes="all"
     )
 
     __table_args__ = (

@@ -138,46 +138,46 @@ class Meeting(db.Model):
     processing_jobs = db.relationship(
         "ProcessingJob",
         back_populates="meeting",
-        passive_deletes=True
+        passive_deletes="all"
     )
 
     speakers = db.relationship(
         "Speaker",
         back_populates="meeting",
-        passive_deletes=True
+        passive_deletes="all"
     )
     transcript_segments = db.relationship(
         "TranscriptSegment",
         back_populates="meeting",
-        passive_deletes=True
+        passive_deletes="all"
     )
 
     ai_runs = db.relationship(
         "AIRun",
         back_populates="meeting",
-        passive_deletes=True
+        passive_deletes="all"
     )
     summaries = db.relationship(
         "Summary",
         back_populates="meeting",
-        passive_deletes=True
+        passive_deletes="all"
     )
 
     key_points = db.relationship(
         "KeyPoint",
         back_populates="meeting",
-        passive_deletes=True
+        passive_deletes="all"
     )
 
     decisions = db.relationship(
         "Decision",
         back_populates="meeting",
-        passive_deletes=True
+        passive_deletes="all"
     )
     action_items = db.relationship(
         "ActionItem",
         back_populates="meeting",
-        passive_deletes=True
+        passive_deletes="all"
     )
 
     __table_args__ = (
